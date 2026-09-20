@@ -89,6 +89,19 @@ spec:
             # trying to reach a Service with zero endpoints.
             - name: ZOOKEEPER_4LW_COMMANDS_WHITELIST
               value: "ruok,srvr,mntr,conf"
+            # BELT AND SUSPENDERS: on this image, the env var above
+            # doesn't reliably get templated into zoo.cfg's
+            # 4lw.commands.whitelist property before ZooKeeper reads
+            # it at boot (confirmed: `printenv` shows the var present
+            # in the container, but `echo ruok | nc ...` still returns
+            # "ruok is not executed because it is not in the
+            # whitelist"). ZooKeeper also accepts this as a JVM system
+            # property, checked independently of zoo.cfg, which
+            # sidesteps the templating step entirely. KAFKA_OPTS is
+            # the env var Confluent's images use to pass extra JVM
+            # args to the zookeeper process.
+            - name: KAFKA_OPTS
+              value: "-Dzookeeper.4lw.commands.whitelist=ruok,srvr,mntr,conf"
           volumeMounts:
             - name: data
               mountPath: /var/lib/zookeeper/data
