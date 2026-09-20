@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: patient-service
+  namespace: venus
+  labels:
+    app: patient-service
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: patient-service
+  template:
+    metadata:
+      labels:
+        app: patient-service
+        tier: backend
+    spec:
+      containers:
+        - name: patient-service
+          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/venus-patient-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: venus-config
+            - secretRef:
+                name: venus-secret
+          env:
+            # NOTE: Kubernetes only expands $(VAR) against variables declared
+            # earlier in THIS env list -- values arriving via envFrom are not
+            # visible to the expansion. So the DB_* keys are pulled in
+            # explicitly here before DATABASE_URL is assembled from them.
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: venus-secret
+                  key: DB_HOST
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: venus-secret
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: venus-secret
+                  key: DB_PASSWORD
+            - name: DATABASE_URL
+              value: "mysql+pymysql://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):3306/venus_patient_db"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: patient-service
+  namespace: venus
+  labels:
+    app: patient-service
+spec:
+  type: ClusterIP
+  selector:
+    app: patient-service
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080

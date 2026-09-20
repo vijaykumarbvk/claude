@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: venus-config
+  namespace: venus
+data:
+  # ---- Service discovery (replaces Eureka; these are k8s DNS names) ----
+  USER_SERVICE_URL:        "http://user-service:80"
+  DOCTOR_SERVICE_URL:      "http://doctor-service:80"
+  PATIENT_SERVICE_URL:     "http://patient-service:80"
+  APPOINTMENT_SERVICE_URL: "http://appointment-service:80"
+
+  # ---- Redis (ElastiCache) ----
+  # REPLACE with: terraform output redis_endpoint
+  REDIS_HOST: "venus-hospital-redis.xxxxxx.0001.use1.cache.amazonaws.com"
+  REDIS_PORT: "6379"
+  REDIS_DB:   "0"
+  REDIS_URL:  "redis://venus-hospital-redis.xxxxxx.0001.use1.cache.amazonaws.com:6379/0"
+
+  # ---- Kafka (in-cluster StatefulSet) ----
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-0.kafka-headless.venus.svc.cluster.local:9092"
+
+  # ---- Gateway ----
+  RATE_LIMIT: "100 per minute"
+
+  # ---- JWT lifetimes (the secret itself lives in the Secret, not here) ----
+  JWT_EXPIRY_SECONDS:         "86400"
+  JWT_REFRESH_EXPIRY_SECONDS: "604800"
