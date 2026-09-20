@@ -28,11 +28,10 @@ variable "db_username" {
   default     = "admin"
 }
 
-variable "db_password" {
-  description = "RDS master password. Pass via TF_VAR_db_password, never commit it."
-  type        = string
-  sensitive   = true
-}
+# No db_password variable — the password is hardcoded in rds.tf, same
+# as your previous project's rds.tf (username = "admin", password =
+# "Cloud123"). No DB_PASSWORD GitHub secret needed. See the security
+# note in rds.tf and in README.md before using this for anything real.
 
 variable "project_tags" {
   type = map(string)
