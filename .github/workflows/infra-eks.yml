@@ -14,7 +14,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  TF_VERSION: "1.9.8"
+  TF_VERSION: "1.10.5"
   TF_WORKING_DIR: EKS-Terraform
   BUCKET_NAME: venus-hospital-tfstate-vijay   # must match backend.tf
 
