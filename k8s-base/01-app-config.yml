@@ -12,7 +12,7 @@ data:
   #
   # REPLACE DB_HOST after `terraform apply` with:
   #   terraform -chdir=EKS-Terraform output -raw rds_endpoint
-  DB_HOST: "venus-hospital-mysql.xxxxxx.us-east-1.rds.amazonaws.com"
+  DB_HOST: "venus-hospital-mysql.c4ryuiiambx4.us-east-1.rds.amazonaws.com"
   DB_USER: "admin"
   DB_PASSWORD: "Cloud123"
 
