@@ -18,6 +18,18 @@ env:
   TF_WORKING_DIR: EKS-Terraform
   BUCKET_NAME: venus-hospital-tfstate-vijay   # must match backend.tf
 
+# ---------------------------------------------------------------------
+# AUTH MODE: ACCESS KEY (active) — AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# repo secrets, used in the "Configure AWS Credentials" steps below.
+#
+# AUTH MODE: OIDC (commented out). To switch: uncomment the permissions
+# block below AND the role-to-assume line in both "Configure AWS
+# Credentials" steps, and comment out their access-key lines instead.
+# ---------------------------------------------------------------------
+# permissions:
+#   id-token: write
+#   contents: read
+
 jobs:
   # ============================================================
   # TERRAFORM PLAN
@@ -33,9 +45,12 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # ---- ACCESS KEY (active) ----
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+          # ---- OIDC (commented out) — see the note above jobs: ----
+          # role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
 
       - name: Verify AWS Identity
         run: aws sts get-caller-identity
@@ -118,9 +133,12 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # ---- ACCESS KEY (active) ----
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+          # ---- OIDC (commented out) — see the note above jobs: ----
+          # role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
