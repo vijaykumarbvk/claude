@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: appointment-service
-          image: 707479681597.dkr.ecr.us-east-1.amazonaws.com/venus-appointment-service:a753506ebc032b55c4385f794523e2105d540d8b
+          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/venus-appointment-service:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -27,27 +27,26 @@ spec:
           envFrom:
             - configMapRef:
                 name: venus-config
-            - secretRef:
-                name: venus-secret
           env:
             # NOTE: Kubernetes only expands $(VAR) against variables declared
             # earlier in THIS env list -- values arriving via envFrom are not
-            # visible to the expansion. So the DB_* keys are pulled in
-            # explicitly here before DATABASE_URL is assembled from them.
+            # visible to the expansion. So DB_* are pulled in explicitly here
+            # (from the ConfigMap -- no Secret object in this project) before
+            # DATABASE_URL is assembled from them.
             - name: DB_HOST
               valueFrom:
-                secretKeyRef:
-                  name: venus-secret
+                configMapKeyRef:
+                  name: venus-config
                   key: DB_HOST
             - name: DB_USER
               valueFrom:
-                secretKeyRef:
-                  name: venus-secret
+                configMapKeyRef:
+                  name: venus-config
                   key: DB_USER
             - name: DB_PASSWORD
               valueFrom:
-                secretKeyRef:
-                  name: venus-secret
+                configMapKeyRef:
+                  name: venus-config
                   key: DB_PASSWORD
             - name: DATABASE_URL
               value: "mysql+pymysql://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):3306/venus_appointment_db"
