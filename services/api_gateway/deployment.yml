@@ -19,19 +19,20 @@ spec:
     spec:
       containers:
         - name: api-gateway
-          image: 707479681597.dkr.ecr.us-east-1.amazonaws.com/venus-api-gateway:a753506ebc032b55c4385f794523e2105d540d8b
+          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/venus-api-gateway:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
               name: http
           # The gateway owns no database — it only needs the downstream
           # service URLs, the Redis URL for rate limiting, and JWT_SECRET
-          # so it can validate tokens before proxying.
+          # so it can validate tokens before proxying. All of that (plus
+          # DB creds for the other services) lives in one ConfigMap — no
+          # k8s Secret object in this project, matching the previous
+          # project's plaintext-ConfigMap pattern.
           envFrom:
             - configMapRef:
                 name: venus-config
-            - secretRef:
-                name: venus-secret
           readinessProbe:
             httpGet:
               path: /actuator/health
