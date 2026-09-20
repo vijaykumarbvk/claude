@@ -61,6 +61,13 @@ spec:
       labels:
         app: zookeeper
     spec:
+      # confluentinc images run as uid 1000 (appuser), but an EBS-backed
+      # PVC mounts owned by root by default. Without fsGroup the
+      # container can't write to its own data dir and crash-loops with
+      # "dub path ... writable FAILED". fsGroup makes the kubelet chown
+      # the volume to this group on mount.
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: zookeeper
           image: confluentinc/cp-zookeeper:7.5.0
@@ -146,6 +153,10 @@ spec:
       labels:
         app: kafka
     spec:
+      # Same reason as zookeeper's securityContext above — cp-kafka
+      # also runs as uid 1000 and needs the EBS volume chowned on mount.
+      securityContext:
+        fsGroup: 1000
       initContainers:
         # Kafka crash-loops if it starts before Zookeeper is accepting
         # connections, so block until the port answers.
