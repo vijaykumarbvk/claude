@@ -200,7 +200,15 @@ spec:
             - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
               value: "true"
             - name: KAFKA_LOG_DIRS
-              value: /var/lib/kafka/data
+              # A subdirectory of the mount, NOT the mount root. mkfs
+              # creates lost+found at the root of every fresh ext4
+              # volume, and Kafka's log-dir scanner treats any
+              # non-topic-partition directory there as fatal
+              # (org.apache.kafka.common.KafkaException: Found
+              # directory .../lost+found). Keeping the actual mount at
+              # /var/lib/kafka/data and logs one level under it avoids
+              # the collision entirely.
+              value: /var/lib/kafka/data/logs
           volumeMounts:
             - name: data
               mountPath: /var/lib/kafka/data
