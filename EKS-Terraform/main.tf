@@ -196,7 +196,7 @@ resource "aws_security_group" "bastion" {
   vpc_id      = aws_vpc.eks_vpc.id
 
   ingress {
-    description = "SSH — narrow this to your own IP in production"
+    description = "SSH - narrow this to your own IP in production"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
