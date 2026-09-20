@@ -78,6 +78,30 @@ Cross-cutting: EFK (kube-logging) · Prometheus+Grafana (prometheus) · ArgoCD (
 
 ---
 
+## Credentials model — no Kubernetes Secret object
+
+This project follows the same pattern as your previous e-commerce
+project's `backend-cm.yml`: **all configuration, including database
+credentials, lives in one plaintext ConfigMap** (`k8s-base/01-app-config.yml`).
+There is no `kind: Secret` anywhere in this repo.
+
+| | Previous project | Venus (this repo) |
+|---|---|---|
+| RDS username/password | hardcoded in `rds.tf` (`admin` / `Cloud123`) | same — hardcoded in `rds.tf` |
+| DB host/user/password in k8s | plaintext in `backend-cm.yml` (ConfigMap) | plaintext in `01-app-config.yml` (ConfigMap) |
+| `DB_PASSWORD` GitHub secret | not used | not used |
+| GitHub secrets needed | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ACCOUNT_ID`, `GIT_PAT` | same four, nothing else |
+
+Say it plainly: this means the RDS password sits in git, in plaintext,
+readable by anyone with repo access or `kubectl get configmap -o yaml`.
+That was true of your previous project too — it's an acceptable trade
+for a dev/demo cluster you stand up and tear down, and a bad one for
+anything holding real data. `rds.tf` and the ConfigMap both carry a
+comment showing the one-line change to switch to a Secrets-Manager-backed
+password if you ever need to.
+
+---
+
 ## Repository layout
 
 ```
@@ -89,14 +113,13 @@ venus-hospital-python/
 │   ├── backend.tf               # S3 remote state
 │   ├── variables.tf
 │   ├── main.tf                  # VPC, subnets, NAT, IAM, EKS, nodegroup, addons, bastion
-│   ├── rds.tf                   # MySQL
+│   ├── rds.tf                   # MySQL — credentials hardcoded, see note above
 │   ├── elasticache.tf           # Redis
 │   ├── ecr.tf                   # 6 repos + lifecycle policies
 │   └── outputs.tf
 ├── k8s-base/
 │   ├── 00-namespace.yml
-│   ├── 01-app-config.yml        # ConfigMap: service URLs, Redis, Kafka
-│   ├── 02-app-secret.yml        # Secret template (placeholders only)
+│   ├── 01-app-config.yml        # ConfigMap: DB creds, JWT secret, service URLs, Redis, Kafka
 │   ├── 03-kafka.yml             # Kafka + Zookeeper StatefulSets
 │   ├── 04-storageclass.yml      # ebs-storage (Kafka AND Elasticsearch need it)
 │   └── 05-mysql-incluster.yml   # OPTIONAL — in-cluster MySQL instead of RDS
@@ -132,26 +155,28 @@ venus-hospital-python/
 
 ## Step 1 — Configure GitHub secrets
 
-Repo → **Settings → Secrets and variables → Actions → New repository secret**:
+Repo → **Settings → Secrets and variables → Actions → New repository secret**.
+Exactly the four you used before — nothing database-related:
 
 | Secret | Purpose |
 |---|---|
 | `AWS_ACCESS_KEY_ID` | Terraform + ECR push |
 | `AWS_SECRET_ACCESS_KEY` | " |
 | `AWS_ACCOUNT_ID` | builds the ECR registry URL |
-| `DB_PASSWORD` | RDS master password (`TF_VAR_db_password`) |
 | `GIT_PAT` | lets CI commit pinned image tags back to `main` |
 
-> Prefer OIDC over long-lived keys? Swap the `configure-aws-credentials`
-> inputs for `role-to-assume:` and drop the two key secrets — same
-> pattern as your existing OIDC pipelines.
+> Prefer OIDC over long-lived keys? Both workflow files already carry
+> the OIDC alternative commented out right next to the access-key
+> lines — uncomment `role-to-assume` + `id-token: write`, comment out
+> the two access-key lines, drop the two key secrets, add
+> `AWS_OIDC_ROLE_ARN` instead.
 
 Also create the **`production` environment** (Settings → Environments) and
 add yourself as a required reviewer — the Terraform apply job gates on it.
 
 ## Step 2 — Set your own names before the first run
 
-Three placeholders must be changed:
+Two placeholders must be changed:
 
 ```bash
 # 1. Terraform state bucket (must be globally unique)
@@ -163,18 +188,20 @@ sed -i 's|https://github.com/CHANGE-ME/venus-hospital-python.git|<YOUR_REPO_URL>
   k8s-argocd/*/*.yaml
 ```
 
+(No DB password placeholder to set — `rds.tf` already has it.)
+
 ## Step 3 — Provision infrastructure
 
 GitHub → **Actions → "Infra — Terraform" → Run workflow → apply**.
 
 Runs plan, waits for your approval, then applies. ~15–20 min (EKS control
-plane and RDS dominate).
+plane and RDS dominate). No `TF_VAR_db_password` to export — the
+workflow needs nothing beyond the four secrets from Step 1.
 
 Locally instead:
 
 ```bash
 cd EKS-Terraform
-export TF_VAR_db_password='<your-rds-password>'
 terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
@@ -206,12 +233,16 @@ the mysql client are preinstalled there by user_data.
 ```bash
 # From the BASTION (RDS is not publicly accessible)
 git clone <YOUR_REPO_URL> && cd venus-hospital-python
-mysql -h <rds_endpoint> -u admin -p < db/init.sql
+mysql -h <rds_endpoint> -u admin -pCloud123 < db/init.sql
 ```
 
 Expect `venus_user_db`, `venus_doctor_db`, `venus_patient_db`,
 `venus_appointment_db`. Tables are created by each service at startup via
 SQLAlchemy — there's no schema DDL here to drift out of sync with the models.
+
+`admin` / `Cloud123` are the credentials hardcoded in `rds.tf` — the same
+ones already sitting in `k8s-base/01-app-config.yml`. If you changed the
+password in `rds.tf` before applying, use that value here instead.
 
 <details>
 <summary><b>Alternative: run MySQL inside the cluster instead of RDS</b></summary>
@@ -223,13 +254,11 @@ for a cheap demo or a local kind/minikube run:
 kubectl apply -f k8s-base/05-mysql-incluster.yml
 kubectl rollout status statefulset/mysql -n venus --timeout=300s
 
-# point the Secret at the in-cluster service instead of RDS
-kubectl create secret generic venus-secret -n venus \
-  --from-literal=DB_HOST='mysql' \
-  --from-literal=DB_USER='root' \
-  --from-literal=DB_PASSWORD='root' \
-  --from-literal=JWT_SECRET="$(openssl rand -base64 48)" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# point the ConfigMap at the in-cluster service instead of RDS
+kubectl patch configmap venus-config -n venus --type merge -p \
+  '{"data":{"DB_HOST":"mysql","DB_USER":"root","DB_PASSWORD":"root"}}'
+
+kubectl rollout restart deploy -n venus
 ```
 
 The four schemas are created automatically by the `mysql-init-script`
@@ -272,8 +301,8 @@ kubectl apply -f k8s-base/00-namespace.yml
 kubectl apply -f k8s-base/04-storageclass.yml
 ```
 
-Now wire in the real endpoints. **Don't commit real credentials** — create
-the Secret imperatively:
+Patch the two endpoints Terraform just created into the ConfigMap —
+this is the only edit needed, no Secret to create:
 
 ```bash
 cd EKS-Terraform
@@ -281,13 +310,8 @@ RDS=$(terraform output -raw rds_endpoint)
 REDIS=$(terraform output -raw redis_endpoint)
 cd ..
 
-kubectl create secret generic venus-secret -n venus \
-  --from-literal=DB_HOST="$RDS" \
-  --from-literal=DB_USER='admin' \
-  --from-literal=DB_PASSWORD="$TF_VAR_db_password" \
-  --from-literal=JWT_SECRET="$(openssl rand -base64 48)"
-
-# The ConfigMap still needs the Redis endpoint patched in:
+sed -i "s|venus-hospital-mysql.xxxxxx.us-east-1.rds.amazonaws.com|$RDS|g" \
+  k8s-base/01-app-config.yml
 sed -i "s|venus-hospital-redis.xxxxxx.0001.use1.cache.amazonaws.com|$REDIS|g" \
   k8s-base/01-app-config.yml
 
@@ -378,37 +402,34 @@ kubectl apply -f k8s-argocd/efk-stack/
 From here the loop is: push code → CI builds and pins the image tag →
 ArgoCD syncs. You stop running `kubectl apply`.
 
-> **Before enabling the `venus-base` app:** it syncs `k8s-base/`, which
-> includes `02-app-secret.yml` with `CHANGE_ME` placeholders. Delete that
-> file (you created the Secret imperatively in Step 8) or move to
-> External Secrets — otherwise ArgoCD will happily overwrite your real
-> Secret with the placeholder values.
+Because there's no Secret in this project, there's also no version of the
+"ArgoCD will overwrite my Secret with placeholders" problem — `venus-base`
+can safely sync `k8s-base/` end to end, ConfigMap included.
 
 ---
 
 # Per-service configuration reference
 
-Every service reads configuration from environment variables only.
-`venus-config` (ConfigMap) and `venus-secret` (Secret) are mounted into
-each pod with `envFrom`, so adding a variable is a one-line ConfigMap edit
-plus `kubectl rollout restart`.
+Every service reads configuration from environment variables only. One
+ConfigMap (`venus-config`) is mounted into each pod with `envFrom`, so
+adding a variable is a one-line ConfigMap edit plus `kubectl rollout restart`.
 
 ### Shared by all services
 
-| Variable | Source | Value |
-|---|---|---|
-| `JWT_SECRET` | Secret | random 48-byte string — **must be identical across all services**, or tokens issued by user-service won't validate at the gateway |
-| `JWT_EXPIRY_SECONDS` | ConfigMap | `86400` |
-| `JWT_REFRESH_EXPIRY_SECONDS` | ConfigMap | `604800` |
-| `KAFKA_BOOTSTRAP_SERVERS` | ConfigMap | `kafka-0.kafka-headless.venus.svc.cluster.local:9092` |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | ConfigMap | ElastiCache endpoint / `6379` / `0` |
+| Variable | Value |
+|---|---|
+| `JWT_SECRET` | fixed dev value in the ConfigMap — **must be identical across all services**, or tokens issued by user-service won't validate at the gateway |
+| `JWT_EXPIRY_SECONDS` | `86400` |
+| `JWT_REFRESH_EXPIRY_SECONDS` | `604800` |
+| `KAFKA_BOOTSTRAP_SERVERS` | `kafka-0.kafka-headless.venus.svc.cluster.local:9092` |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | ElastiCache endpoint / `6379` / `0` |
 
 ### `user-service`
 
 | Variable | Value |
 |---|---|
 | `DATABASE_URL` | assembled in `deployment.yml` → `venus_user_db` |
-| `DB_HOST` / `DB_USER` / `DB_PASSWORD` | from `venus-secret` |
+| `DB_HOST` / `DB_USER` / `DB_PASSWORD` | from `venus-config` ConfigMap — `admin` / `Cloud123` by default |
 
 Issues JWTs on `/api/users/login`; the only service that writes password
 hashes. Publishes `user-registration-topic` events.
@@ -457,7 +478,7 @@ Both tunable in `services/appointment_service/config.py`. Publishes
 | `USER_SERVICE_URL`, `DOCTOR_SERVICE_URL`, `PATIENT_SERVICE_URL`, `APPOINTMENT_SERVICE_URL` | ConfigMap, k8s DNS names |
 | `REDIS_URL` | `redis://<elasticache>:6379/0` — backs Flask-Limiter |
 | `RATE_LIMIT` | `100 per minute` |
-| `JWT_SECRET` | Secret |
+| `JWT_SECRET` | ConfigMap |
 
 Owns no database. Validates the JWT, injects `X-User-Id` / `X-User-Role`
 headers, then proxies. Each downstream route gets its own pybreaker
@@ -490,6 +511,9 @@ Two deployment details matter here and are easy to get wrong:
 # Everything running?
 kubectl get pods -n venus
 
+# Confirm the ConfigMap has real endpoints, not the xxxxxx placeholders
+kubectl get configmap venus-config -n venus -o yaml | grep -E "DB_HOST|REDIS_HOST"
+
 # Gateway healthy from inside the cluster?
 kubectl run curl --rm -it --image=curlimages/curl -n venus --restart=Never -- \
   curl -s http://api-gateway/actuator/health
@@ -515,11 +539,11 @@ curl -s -X POST "http://$INGRESS/api/users/login" \
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Pods `ImagePullBackOff` | manifest still says `ACCOUNT_ID...` | run the build workflow, then `git pull` |
-| `CrashLoopBackOff`, logs show DB connect error | schemas missing, or SG blocking | run `db/init.sql`; confirm RDS SG allows 3306 from the VPC CIDR |
+| `CrashLoopBackOff`, logs show DB connect error | schemas missing, SG blocking, or `DB_HOST` still the `xxxxxx` placeholder | run `db/init.sql`; confirm the ConfigMap has the real RDS endpoint (Step 8); confirm RDS SG allows 3306 from the VPC CIDR |
 | Kafka pod `Pending` | no `ebs-storage` StorageClass or EBS CSI driver missing | `kubectl apply -f k8s-base/04-storageclass.yml`; `kubectl get pods -n kube-system \| grep ebs` |
 | Streamlit stuck on "Please wait…" | websocket timeout | confirm `proxy-read-timeout` annotation on the ingress |
 | Random logouts in the UI | no session affinity | confirm the `affinity: cookie` annotations |
-| `401` on every gateway call | `JWT_SECRET` differs between user-service and gateway | both read the same Secret — `kubectl rollout restart deploy -n venus` after changing it |
+| `401` on every gateway call | `JWT_SECRET` was edited in the ConfigMap but pods weren't restarted | `kubectl rollout restart deploy -n venus` — every service reads the same key, so a stale pod and a fresh pod disagree |
 | Ingress `EXTERNAL-IP` stuck `<pending>` | public subnets missing ELB tags | they're tagged `kubernetes.io/role/elb=1` in `main.tf` — verify with `terraform state show` |
 | `503` from gateway for one service | circuit breaker opened | check that service's logs; the breaker resets after 15s |
 
@@ -578,11 +602,13 @@ Then visit `http://localhost:8501`.
 
 # Security notes — read before calling this production-ready
 
-A few things here are deliberately simple for a demo build:
+A few things here are deliberately simple for a demo build, same choices
+your previous project made:
 
-- **Secrets in etcd.** `venus-secret` is base64, not encrypted. Move to
-  AWS Secrets Manager + External Secrets Operator, and enable EKS
-  envelope encryption with KMS.
+- **Credentials in a plaintext ConfigMap, in git.** This is the explicit
+  trade this README describes above. Move to AWS Secrets Manager +
+  External Secrets Operator (or at minimum a k8s Secret pulled from
+  `.gitignore`d values) before this holds anything real.
 - **No TLS.** The ingress serves plain HTTP. Add cert-manager + ACM and
   an HTTPS listener before anyone types a real password into it.
 - **Bastion SSH is open to `0.0.0.0/0`.** Narrow it to your own IP, or
