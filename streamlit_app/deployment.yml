@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: streamlit-frontend
-          image: 707479681597.dkr.ecr.us-east-1.amazonaws.com/venus-streamlit-frontend:b19b22fddf96f227b759b664563c8386eddda731
+          image: 707479681597.dkr.ecr.us-east-1.amazonaws.com/venus-streamlit-frontend:a753506ebc032b55c4385f794523e2105d540d8b
           imagePullPolicy: Always
           ports:
             - containerPort: 8501
