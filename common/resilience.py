@@ -1,22 +1,47 @@
 """
-Circuit breaker (pybreaker) and Kafka event publishing helpers.
-Equivalent to Resilience4j's @CircuitBreaker and Spring Kafka's KafkaTemplate.
+Circuit breaker (pybreaker) + event publishing.
+
+Originally used Kafka + Zookeeper. Kafka is JVM software -- that's
+inherent to Kafka itself, unrelated to this app being Python. Running
+it well on Kubernetes brought a long tail of JVM-specific operational
+friction (StatefulSet field immutability, the four-letter-word command
+whitelist, zoo.cfg templating quirks, EBS AZ affinity) that has nothing
+to do with this app's code.
+
+Nothing in this codebase consumes these events yet -- every call site
+is `event_publisher.publish(topic, key, event)` and nothing else reads
+them back. That means the app needs a durable, ordered append log, not
+Kafka's specific consumer-group/partition/rebalance machinery. Redis
+Streams (XADD) gives the same semantics using infrastructure this
+project already runs -- the same ElastiCache Redis instance backing
+@cached and the API gateway's rate limiter. No JVM, no StatefulSet, no
+PVC, nothing to fight.
+
+publish(topic, key, event) keeps the exact signature the Kafka version
+had, so no calling code in any service needs to change.
 """
 import json
 import logging
 import os
 
 import pybreaker
-from kafka import KafkaProducer
-from kafka.errors import KafkaError
+import redis
 
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+REDIS_DB = int(os.environ.get("REDIS_DB", 0))
 
-# One shared breaker per outbound dependency type is typical; services can
-# import `build_breaker` to make a named breaker per downstream call.
+# Cap each stream at ~10k entries (approximate trim -- cheap, doesn't
+# require an exact count) so a topic nobody's consuming yet doesn't
+# grow Redis's memory unbounded.
+STREAM_MAXLEN = int(os.environ.get("EVENT_STREAM_MAXLEN", 10000))
+
+
 def build_breaker(name: str, fail_max: int = 5, reset_timeout: int = 30) -> pybreaker.CircuitBreaker:
+    """One shared breaker per outbound dependency; services call this to
+    make a named breaker per downstream call (e.g. calls to user-service)."""
     return pybreaker.CircuitBreaker(
         fail_max=fail_max,
         reset_timeout=reset_timeout,
@@ -25,29 +50,40 @@ def build_breaker(name: str, fail_max: int = 5, reset_timeout: int = 30) -> pybr
 
 
 class EventPublisher:
-    """Lazily-connected Kafka producer with graceful degradation."""
+    """Lazily-connected Redis Streams producer with graceful degradation."""
 
     def __init__(self):
-        self._producer = None
+        self._client = None
 
-    def _get_producer(self):
-        if self._producer is None:
-            self._producer = KafkaProducer(
-                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-                value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
-                key_serializer=lambda k: str(k).encode("utf-8") if k is not None else None,
-                request_timeout_ms=5000,
+    def _get_client(self) -> "redis.Redis":
+        if self._client is None:
+            self._client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                db=REDIS_DB,
+                decode_responses=True,
+                socket_connect_timeout=3,
+                socket_timeout=3,
             )
-        return self._producer
+        return self._client
 
     def publish(self, topic: str, key, event: dict):
+        """
+        Append `event` to the Redis stream named `topic`. Redis Streams
+        preserve insertion order per-stream and are durable (persisted
+        with Redis's normal AOF/RDB persistence), same as a Kafka topic
+        with a single partition -- which is all this app ever used.
+        """
         try:
-            producer = self._get_producer()
-            producer.send(topic, key=key, value=event)
-            producer.flush(timeout=5)
-        except KafkaError as exc:
+            client = self._get_client()
+            fields = {
+                "key": str(key) if key is not None else "",
+                "payload": json.dumps(event, default=str),
+            }
+            client.xadd(topic, fields, maxlen=STREAM_MAXLEN, approximate=True)
+        except redis.RedisError as exc:
             # Publishing failures should never break the primary request flow.
-            logger.warning("Kafka publish failed for topic=%s: %s", topic, exc)
+            logger.warning("Redis Streams publish failed for topic=%s: %s", topic, exc)
 
 
 event_publisher = EventPublisher()
