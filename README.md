@@ -53,13 +53,13 @@ Terraform, Docker, ECR, ArgoCD, EFK and Prometheus/Grafana.
         │              │                 │                   │
         └──────────────┴────────┬────────┴───────────────────┘
                                 │
-     ┌──────────────────────────┼──────────────────────────┐
-     │                          │                          │
-┌────▼─────────┐   ┌────────────▼─────────┐   ┌────────────▼────────────┐
-│ RDS MySQL     │   │ ElastiCache Redis    │   │ Kafka + Zookeeper       │
-│ 4 schemas     │   │ cache + rate limits  │   │ (in-cluster StatefulSet)│
-│ (private)     │   │ (private)            │   │ event stream            │
-└───────────────┘   └──────────────────────┘   └─────────────────────────┘
+                  ┌─────────────┴──────────────┐
+                  │                            │
+        ┌─────────▼─────┐          ┌───────────▼───────────┐
+        │ RDS MySQL      │          │ ElastiCache Redis      │
+        │ 4 schemas      │          │ cache + rate limits    │
+        │ (private)      │          │ + event bus (Streams)  │
+        └────────────────┘          └────────────────────────┘
 
 Cross-cutting: EFK (kube-logging) · Prometheus+Grafana (prometheus) · ArgoCD (argocd)
 ```
@@ -74,31 +74,6 @@ Cross-cutting: EFK (kube-logging) · Prometheus+Grafana (prometheus) · ArgoCD (
 | `patient-service` | Deployment ×2 | 8080 | `venus-patient-service` | `venus_patient_db` |
 | `appointment-service` | Deployment ×2 | 8080 | `venus-appointment-service` | `venus_appointment_db` |
 | `streamlit-frontend` | Deployment ×2 | 8501 | `venus-streamlit-frontend` | session state |
-| `kafka` / `zookeeper` | StatefulSet ×1 | 9092 / 2181 | Confluent upstream | EBS PVC |
-
----
-
-## Credentials model — no Kubernetes Secret object
-
-This project follows the same pattern as your previous e-commerce
-project's `backend-cm.yml`: **all configuration, including database
-credentials, lives in one plaintext ConfigMap** (`k8s-base/01-app-config.yml`).
-There is no `kind: Secret` anywhere in this repo.
-
-| | Previous project | Venus (this repo) |
-|---|---|---|
-| RDS username/password | hardcoded in `rds.tf` (`admin` / `Cloud123`) | same — hardcoded in `rds.tf` |
-| DB host/user/password in k8s | plaintext in `backend-cm.yml` (ConfigMap) | plaintext in `01-app-config.yml` (ConfigMap) |
-| `DB_PASSWORD` GitHub secret | not used | not used |
-| GitHub secrets needed | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ACCOUNT_ID`, `GIT_PAT` | same four, nothing else |
-
-Say it plainly: this means the RDS password sits in git, in plaintext,
-readable by anyone with repo access or `kubectl get configmap -o yaml`.
-That was true of your previous project too — it's an acceptable trade
-for a dev/demo cluster you stand up and tear down, and a bad one for
-anything holding real data. `rds.tf` and the ConfigMap both carry a
-comment showing the one-line change to switch to a Secrets-Manager-backed
-password if you ever need to.
 
 ---
 
@@ -119,9 +94,8 @@ venus-hospital-python/
 │   └── outputs.tf
 ├── k8s-base/
 │   ├── 00-namespace.yml
-│   ├── 01-app-config.yml        # ConfigMap: DB creds, JWT secret, service URLs, Redis, Kafka
-│   ├── 03-kafka.yml             # Kafka + Zookeeper StatefulSets
-│   ├── 04-storageclass.yml      # ebs-storage (Kafka AND Elasticsearch need it)
+│   ├── 01-app-config.yml        # ConfigMap: DB creds, JWT secret, service URLs, Redis
+│   ├── 04-storageclass.yml      # ebs-storage (Elasticsearch needs it)
 │   └── 05-mysql-incluster.yml   # OPTIONAL — in-cluster MySQL instead of RDS
 ├── docs/
 │   ├── architecture.png/.svg    # runtime architecture diagram
@@ -316,15 +290,12 @@ sed -i "s|venus-hospital-redis.xxxxxx.0001.use1.cache.amazonaws.com|$REDIS|g" \
   k8s-base/01-app-config.yml
 
 kubectl apply -f k8s-base/01-app-config.yml
-kubectl apply -f k8s-base/03-kafka.yml
 ```
 
-Wait for Kafka before starting the services that publish to it:
-
-```bash
-kubectl rollout status statefulset/zookeeper -n venus --timeout=300s
-kubectl rollout status statefulset/kafka     -n venus --timeout=300s
-```
+That's the whole base layer. There's no Kafka/Zookeeper step here anymore —
+the event bus runs on Redis Streams, using the same ElastiCache endpoint
+you just patched in above (see `common/resilience.py`). One less stateful
+thing to operate, and nothing further to wait on before Step 9.
 
 ## Step 9 — Deploy the services
 
@@ -421,8 +392,8 @@ adding a variable is a one-line ConfigMap edit plus `kubectl rollout restart`.
 | `JWT_SECRET` | fixed dev value in the ConfigMap — **must be identical across all services**, or tokens issued by user-service won't validate at the gateway |
 | `JWT_EXPIRY_SECONDS` | `86400` |
 | `JWT_REFRESH_EXPIRY_SECONDS` | `604800` |
-| `KAFKA_BOOTSTRAP_SERVERS` | `kafka-0.kafka-headless.venus.svc.cluster.local:9092` |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | ElastiCache endpoint / `6379` / `0` |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | ElastiCache endpoint / `6379` / `0` — also doubles as the event bus (Redis Streams, see below) |
+| `EVENT_STREAM_MAXLEN` | `10000` — approx. cap per stream so an unread topic doesn't grow Redis memory unbounded |
 
 ### `user-service`
 
@@ -463,8 +434,7 @@ rather than storing them, so they never go stale.
 | Variable | Value |
 |---|---|
 | `DATABASE_URL` | → `venus_appointment_db` |
-| `KAFKA_BOOTSTRAP_SERVERS` | Kafka StatefulSet |
-| `REDIS_*` | doctor-schedule cache (60s TTL) |
+| `REDIS_*` | doctor-schedule cache (60s TTL) + event bus (Redis Streams) |
 
 Enforces two booking rules in `_validate_doctor_availability()`: max 20
 appointments per doctor per day, and no second booking within ±30 minutes.
@@ -540,7 +510,8 @@ curl -s -X POST "http://$INGRESS/api/users/login" \
 |---|---|---|
 | Pods `ImagePullBackOff` | manifest still says `ACCOUNT_ID...` | run the build workflow, then `git pull` |
 | `CrashLoopBackOff`, logs show DB connect error | schemas missing, SG blocking, or `DB_HOST` still the `xxxxxx` placeholder | run `db/init.sql`; confirm the ConfigMap has the real RDS endpoint (Step 8); confirm RDS SG allows 3306 from the VPC CIDR |
-| Kafka pod `Pending` | no `ebs-storage` StorageClass or EBS CSI driver missing | `kubectl apply -f k8s-base/04-storageclass.yml`; `kubectl get pods -n kube-system \| grep ebs` |
+| Elasticsearch pod `Pending` | no `ebs-storage` StorageClass or EBS CSI driver missing | `kubectl apply -f k8s-base/04-storageclass.yml`; `kubectl get pods -n kube-system \| grep ebs` |
+| Events not showing up anywhere / worried publishing is silently failing | nothing consumes these streams yet — that's expected, not a bug | confirm publishing itself worked: `kubectl exec -it deploy/appointment-service -n venus -- python -c "import redis,os; r=redis.Redis(host=os.environ['REDIS_HOST']); print(r.xlen('appointment-events'))"` |
 | Streamlit stuck on "Please wait…" | websocket timeout | confirm `proxy-read-timeout` annotation on the ingress |
 | Random logouts in the UI | no session affinity | confirm the `affinity: cookie` annotations |
 | `401` on every gateway call | `JWT_SECRET` was edited in the ConfigMap but pods weren't restarted | `kubectl rollout restart deploy -n venus` — every service reads the same key, so a stale pod and a fresh pod disagree |
@@ -584,7 +555,7 @@ terraform destroy
 The full stack still runs locally without AWS:
 
 ```bash
-docker-compose up -d            # MySQL, Redis, Kafka, Zookeeper
+docker-compose up -d            # MySQL, Redis
 
 # 5 terminals, from the repo root:
 python -m services.user_service.app
@@ -613,9 +584,10 @@ your previous project made:
   an HTTPS listener before anyone types a real password into it.
 - **Bastion SSH is open to `0.0.0.0/0`.** Narrow it to your own IP, or
   drop the bastion and use SSM Session Manager instead.
-- **Single-AZ RDS, single-broker Kafka.** Fine for a demo, not for
-  anything with a recovery objective. Set `multi_az = true` and move
-  Kafka to MSK.
+- **Single-AZ RDS, single-node Redis.** Fine for a demo, not for
+  anything with a recovery objective. Set `multi_az = true` on RDS and
+  size ElastiCache with replicas if this ever needs to survive an AZ
+  outage — that now covers the event bus too, since it rides on Redis.
 - **Health data.** If this ever handles real patient records, the
   encryption, audit logging and access controls all need to clear
   HIPAA-equivalent requirements — a considerably larger scope than this
