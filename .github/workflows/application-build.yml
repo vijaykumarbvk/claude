@@ -16,6 +16,9 @@ env:
 
 permissions:
   contents: write
+  # id-token: write   # <- OIDC: uncomment this line to allow requesting the OIDC JWT.
+                       #    (also uncomment the role-to-assume block below, and
+                       #    comment out the aws-access-key-id/aws-secret-access-key lines)
 
 jobs:
   build-and-push:
@@ -58,9 +61,22 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # ---------------------------------------------------------
+          # AUTH MODE: ACCESS KEY (active). Repo secrets AWS_ACCESS_KEY_ID
+          # and AWS_SECRET_ACCESS_KEY, set under Settings > Secrets > Actions.
+          # ---------------------------------------------------------
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+          # ---------------------------------------------------------
+          # AUTH MODE: OIDC (commented out). To switch:
+          #   1. Comment out the two access-key lines above.
+          #   2. Uncomment the line below.
+          #   3. Uncomment `id-token: write` in the permissions: block up top.
+          #   4. Create the OIDC provider + IAM role (trust policy scoped to
+          #      this repo) and put its ARN in the AWS_OIDC_ROLE_ARN secret.
+          # ---------------------------------------------------------
+          # role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
