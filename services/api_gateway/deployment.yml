@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: api-gateway
-          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/venus-api-gateway:latest
+          image: 749210469038.dkr.ecr.us-east-1.amazonaws.com/venus-api-gateway:9a5b4f8bf7bf79d6c3f73e98233478d2a3334df2
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
