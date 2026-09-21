@@ -15,7 +15,6 @@ import os
 class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'super-secret-key')
     
-    # Read from environment variables, defaulting to 'mysql-service'
     DB_HOST = os.getenv("DB_HOST", "mysql-service")
     DB_PORT = os.getenv("DB_PORT", "3306")
     DB_USER = os.getenv("DB_USER", "root")
