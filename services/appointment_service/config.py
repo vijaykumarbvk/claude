@@ -27,3 +27,7 @@ class Config:
         f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # Custom Business Rule Conditions
+    MAX_APPOINTMENTS_PER_DOCTOR_PER_DAY = int(os.getenv("MAX_APPOINTMENTS_PER_DOCTOR_PER_DAY", 20))
+    CONFLICT_WINDOW_MINUTES = int(os.getenv("CONFLICT_WINDOW_MINUTES", 30))
