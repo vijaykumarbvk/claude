@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: doctor-service
-          image: 749210469038.dkr.ecr.us-east-1.amazonaws.com/venus-doctor-service:9a5b4f8bf7bf79d6c3f73e98233478d2a3334df2
+          image: 286593018001.dkr.ecr.us-east-1.amazonaws.com/venus-doctor-service:3d44c8e049fd340c3881faf3ecb928815dce903c
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
