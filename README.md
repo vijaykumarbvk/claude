@@ -272,7 +272,7 @@ aws ecr list-images --repository-name venus-user-service
 git pull   # picks up the CI-pinned image tags
 
 kubectl apply -f k8s-base/00-namespace.yml
-kubectl apply -f k8s-base/04-storageclass.yml
+# kubectl apply -f k8s-base/04-storageclass.yml
 ```
 
 Patch the two endpoints Terraform just created into the ConfigMap —
@@ -289,7 +289,9 @@ sed -i "s|venus-hospital-mysql.xxxxxx.us-east-1.rds.amazonaws.com|$RDS|g" \
 sed -i "s|venus-hospital-redis.xxxxxx.0001.use1.cache.amazonaws.com|$REDIS|g" \
   k8s-base/01-app-config.yml
 
-kubectl apply -f k8s-base/01-app-config.yml
+kubectl apply -f k8s-base/01-app-config.yml   # after editing DB_HOST / REDIS_*
+kubectl apply -f k8s-base/04-storageclass.yml
+# optional: in-cluster MySQL instead of RDS → 05-mysql-incluster.yml
 ```
 
 That's the whole base layer. There's no Kafka/Zookeeper step here anymore —
