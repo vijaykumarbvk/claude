@@ -2,9 +2,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: doctor-service
-  namespace: hospital-ns
+  namespace: venus
+  labels:
+    app: doctor-service
+    tier: backend
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: doctor-service
@@ -12,39 +15,56 @@ spec:
     metadata:
       labels:
         app: doctor-service
+        tier: backend
     spec:
       containers:
-      - name: doctor-service
-        image: 286593018001.dkr.ecr.us-east-1.amazonaws.com/venus-doctor-service:3d44c8e049fd340c3881faf3ecb928815dce903c
-        ports:
-        - containerPort: 5002
-        env:
-        - name: DB_HOST
-          value: "mysql-service"
-        - name: DB_PORT
-          value: "3306"
-        - name: DB_NAME
-          value: "hospital_db"
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: mysql-secret
-              key: username
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: mysql-secret
-              key: password
+        - name: doctor-service
+          image: 286593018001.dkr.ecr.us-east-1.amazonaws.com/venus-doctor-service:3d44c8e049fd340c3881faf3ecb928815dce903c
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: venus-config
+          env:
+            - name: DB_NAME
+              value: "venus_doctor_db"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: doctor-service
-  namespace: hospital-ns
+  namespace: venus
+  labels:
+    app: doctor-service
 spec:
+  type: ClusterIP
   selector:
     app: doctor-service
   ports:
-  - port: 5002
-    targetPort: 5002
-  type: ClusterIP
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080

@@ -13,7 +13,7 @@ from flask import request, g
 
 from common.responses import error
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "venus-hospital-secret-key-for-jwt-token-generation-2024")
+JWT_SECRET = os.environ.get("JWT_SECRET", "venus-hospital-dev-jwt-secret-CHANGE-ME-b64:pQr7ZmX92kLtFj4Nc8Ws")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_SECONDS = int(os.environ.get("JWT_EXPIRY_SECONDS", 86400))          # 24h
 JWT_REFRESH_EXPIRY_SECONDS = int(os.environ.get("JWT_REFRESH_EXPIRY_SECONDS", 604800))  # 7d

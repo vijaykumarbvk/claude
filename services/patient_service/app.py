@@ -46,7 +46,13 @@ def create_app():
     register_error_handlers(app)
 
     with app.app_context():
-        db.create_all()
+        # Allow the process to start even if DB is briefly unreachable
+        # (RDS schema bootstrap, SG propagation, etc.). Probes keep the
+        # pod out of service until create_all has succeeded at least once.
+        try:
+            db.create_all()
+        except Exception as exc:
+            app.logger.warning("db.create_all() deferred: %s", exc)
 
     @app.post("/api/patients")
     @token_required
